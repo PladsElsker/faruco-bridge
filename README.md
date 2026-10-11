@@ -82,7 +82,7 @@ print(output)
 
 ### Command-line usage
 ```sh
-python -m generator \
+python examples/generator.py \
     --type FRACTAL_3L_6 \
     --bit-size 20 \
     --output fractal_3l_6.png
