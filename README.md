@@ -1,106 +1,81 @@
 # FArUco Bridge
 
-A small, vendorable wrapper around **ArUco2's Fractal ArUco (FArUco) implementation**. It builds one C++ executable and includes a Python client that communicates with a long-lived worker over stdin/stdout pipes.
+A Python client for **ArUco2's Fractal ArUco (FArUco) implementation**. The Python package communicates with a separately compiled C++ worker over a persistent stdin/stdout pipe. Detection and marker generation remain in ArUco2's C++ implementation.
 
-This repository is intended to be cloned separately or included in another project as a Git submodule. The Python code is imported directly from this checkout. **There is no Python package installation step**, and the worker does not need to be installed into a system directory. All fractal generation and detection use ArUco2's C++ implementation; this project does not replace or modify upstream ArUco2.
+The Python client is an installable package (`faruco-bridge`). The `faruco_worker` executable is built separately for the target machine; it is not bundled into the Python wheel.
 
-## Quick start
+## Install from source
 
-The normal workflow is:
+These instructions are for Kubuntu/Ubuntu and Raspberry Pi OS/Debian. Build the native executable on each target machine, including the Raspberry Pi itself when targeting ARM.
 
-1. Clone this bridge (or add it as a Git submodule).
-2. Install native build dependencies and fetch ArUco2's source.
-3. Compile `build/faruco_worker` on the machine where it will run.
-4. Add the bridge checkout to your Python import path once, then import and use `faruco_bridge`.
-
-### 1. Get the bridge source
-
-For local testing, clone your bridge repository:
+### 1. Get the source and ArUco2 submodule
 
 ```bash
-git clone <your-faruco-bridge-repository> faruco_bridge
-cd faruco_bridge
+git clone --recurse-submodules https://github.com/PladsElsker/faruco-bridge.git
+cd faruco-bridge
 ```
 
-For a host application that vendors the bridge as a submodule, run this from the host application's root:
+If you already cloned without submodules, initialize them:
 
 ```bash
-git submodule add <your-faruco-bridge-repository> third_party/faruco_bridge
 git submodule update --init --recursive
 ```
 
-The URL is a placeholder until you publish your own bridge repository. ArUco2 itself is fetched separately in the next step; it is not included in this source archive.
-
 ### 2. Install native build dependencies
-
-On Kubuntu/Ubuntu or Raspberry Pi OS/Debian:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake git pkg-config libopencv-dev python3-numpy python3-opencv
+sudo apt install -y build-essential cmake git pkg-config libopencv-dev
 ```
 
-The Python client requires NumPy. Python OpenCV (`cv2`) is needed only for the webcam example and `DetectionResult.annotate()`; the native worker links against the system's C++ OpenCV libraries.
-
-If you use a virtual environment, make sure it can import NumPy. On Ubuntu-family systems, a development environment created with `python3 -m venv .venv --system-site-packages` can use the distribution-provided NumPy/OpenCV packages without installing this bridge as a package.
-
-### 3. Fetch ArUco2 and compile the worker
-
-Run these commands from the bridge checkout:
+### 3. Compile the C++ worker
 
 ```bash
-./scripts/bootstrap_aruco2.sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
 ```
 
-The executable should be created at:
+The executable should be at `build/faruco_worker`. CMake requires the ArUco2 submodule in `third_party/aruco2`. For a custom ArUco2 checkout, configure with `-DARUCO2_ROOT=/path/to/aruco2`.
 
-```text
-build/faruco_worker
-```
+### 4. Install the Python package
 
-The bootstrap script clones ArUco2 into `third_party/aruco2/` and prints the exact commit it fetched. For reproducible deployment, record and pin a tested ArUco2 commit rather than relying on the latest upstream revision indefinitely.
-
-If you already have an ArUco2 checkout, you can build against it instead:
+Create a virtual environment and install the project from the bridge root:
 
 ```bash
-cmake -S . -B build -DARUCO2_ROOT=/path/to/aruco2 -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j2
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install .
 ```
 
-**Do not run `pip install`, `pip install -e`, or `cmake --install` for the normal workflow.** The bridge Python code is imported from its checkout, and `faruco_bridge` finds `build/faruco_worker` relative to that checkout by default. For a non-standard build location, pass `worker_path=...` to `Detector` / `generate_marker`, or set the `FARUCO_WORKER` environment variable.
+NumPy is installed as a Python dependency. Python OpenCV is optional and is only needed for the webcam example and `DetectionResult.annotate()`; install it with `python -m pip install '.[opencv]'` if required. The C++ build still requires the system OpenCV development package from step 2.
 
-Build the executable on each target machine. An x86-64 Kubuntu executable cannot be copied to an ARM Raspberry Pi; compile it on the Pi or build it for the Pi's target architecture.
+Tell the installed package where the separately compiled executable is located:
 
-## Using the bridge from a host application
-
-Suppose the host project contains this submodule:
-
-```text
-your-app/
-├── src/
-│   └── main.py
-└── third_party/
-    └── faruco_bridge/
-        ├── build/faruco_worker
-        └── faruco_bridge/
+```bash
+export FARUCO_WORKER="$PWD/build/faruco_worker"
 ```
 
-Add the submodule checkout to `sys.path` once near your application's entry point. Adapt the path to match your own project layout:
+Keep this environment variable set in the shell or service that runs your application. Alternatively, put `faruco_worker` on `PATH`, or pass `worker_path="/absolute/path/to/faruco_worker"` to `Detector` and `generate_marker`. The worker starts only when the first valid `Detector.detect()` call is made.
 
-```python
-import sys
-from pathlib import Path
+### Installing as a submodule in another application
 
-APP_ROOT = Path(__file__).resolve().parents[1]
-BRIDGE_ROOT = APP_ROOT / "third_party" / "faruco_bridge"
-sys.path.insert(0, str(BRIDGE_ROOT))
+From the host application's root:
 
-from faruco_bridge import Detector, generate_marker
+```bash
+git submodule add https://github.com/PladsElsker/faruco-bridge.git third_party/faruco_bridge
+git submodule update --init --recursive
+cmake -S third_party/faruco_bridge -B third_party/faruco_bridge/build -DCMAKE_BUILD_TYPE=Release
+cmake --build third_party/faruco_bridge/build -j2
+python -m pip install ./third_party/faruco_bridge
+export FARUCO_WORKER="$PWD/third_party/faruco_bridge/build/faruco_worker"
 ```
 
-If the bridge checkout is already on `PYTHONPATH`, or your application launches with the bridge root on Python's import path, no path setup is needed. No custom Python package is installed into the environment.
+This installs the Python package into the active Python environment while keeping the C++ worker and ArUco2 source within the submodule checkout. The executable must be compiled for the host application's target architecture.
+
+## Lazy worker startup
+
+Constructing a `Detector` validates its configuration but does not start a process or resolve the worker executable. The first valid `detect()` call starts the C++ worker and performs its protocol handshake; subsequent detections reuse that process. `close()` or leaving a `with Detector(...)` block before the first detection does not start the worker. `ping()` returns `False` until a worker has been started.
 
 ## Generate a marker
 
@@ -204,13 +179,13 @@ If `camera_matrix` is supplied but `dist_coeffs` is omitted, five zero distortio
 
 ## Webcam example
 
-Run from the bridge checkout after compiling the worker:
+After compiling the worker and setting `FARUCO_WORKER`, run:
 
 ```bash
-python3 examples/webcam_demo.py --camera 0 --type FRACTAL_3L_6
+python examples/webcam_demo.py --camera 0 --type FRACTAL_3L_6
 ```
 
-The example adds the bridge checkout to its own import path, so it can run directly from the checkout without installing the Python code. An optional NPZ calibration file can contain arrays named `camera_matrix` and `dist_coeffs`:
+The example can also run directly from the checkout without installing the package. An optional NPZ calibration file can contain arrays named `camera_matrix` and `dist_coeffs`:
 
 ```bash
 python3 examples/webcam_demo.py --camera 0 --calibration calibration.npz
@@ -220,10 +195,11 @@ Press `q` or Escape to exit.
 
 ## Tests
 
-The client/protocol tests use a fake worker, so they do not require an ArUco2 checkout or a working native build. They do require `pytest` and NumPy. On Kubuntu/Ubuntu, `pytest` can be installed for development with `sudo apt install python3-pytest` (this is only a test dependency, not a bridge installation):
+The client/protocol tests use a fake worker, so they do not require an ArUco2 checkout or a working native build. Install the development test dependency and run them with:
 
 ```bash
-python3 -m pytest -q
+python -m pip install -e '.[test]'
+python -m pytest -q
 ```
 
 A native smoke test must still be performed on a machine with ArUco2 and the OpenCV development libraries installed: generate a marker, detect it in a saved or rendered frame, and check corner and pose-point output.
@@ -239,7 +215,7 @@ DETECT <request_id> <width> <height> <channels> <payload_bytes> <include_points>
 
 `channels` is `1` for grayscale or `3` for BGR, with interleaved row-major `uint8` pixels. Responses are one JSON object per line. `PING` and `QUIT` provide health-check and shutdown commands. Stdout is reserved for protocol messages; diagnostics go to stderr.
 
-The protocol is synchronous: Python sends one frame and waits for its result before sending another. This avoids per-frame process startup and image re-encoding, while keeping the initial implementation simple. It does not yet implement asynchronous pipelining or shared-memory transport.
+The worker starts lazily on the first valid detection and is then reused. The protocol is synchronous: Python sends one frame and waits for its result before sending another. This avoids per-frame process startup and image re-encoding, while keeping the initial implementation simple. It does not yet implement asynchronous pipelining or shared-memory transport.
 
 ## Notes and limitations
 

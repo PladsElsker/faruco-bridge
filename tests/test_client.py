@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from faruco_bridge import Detector, ProtocolError, WorkerError
+from faruco_bridge import Detector, ProtocolError, WorkerError, WorkerNotFoundError
 
 
 FAKE_WORKER = r'''#!/usr/bin/env python3
@@ -57,10 +57,14 @@ def fake_worker(tmp_path: Path) -> Path:
 
 def test_persistent_worker_round_trip(fake_worker: Path) -> None:
     with Detector(worker_path=fake_worker) as detector:
-        assert detector.ping()
+        # Construction and ping do not start the worker; detect() does.
+        assert detector._process is None
+        assert not detector.ping()
         # Non-contiguous ROI exercises contiguous-buffer conversion.
         image = np.zeros((24, 32, 3), dtype=np.uint8)[:, ::2, :]
         result = detector.detect(image)
+        assert detector._process is not None
+        assert detector.ping()
         assert result.request_id == 1
         assert result.marker_count == 1
         assert result.elapsed_ms == pytest.approx(1.25)
@@ -78,10 +82,11 @@ def test_detections_without_correspondences(fake_worker: Path) -> None:
         assert result.markers[0].image_points is None
 
 
-def test_rejects_wrong_image_shape_before_writing(fake_worker: Path) -> None:
+def test_rejects_wrong_image_shape_before_starting_worker(fake_worker: Path) -> None:
     with Detector(worker_path=fake_worker) as detector:
         with pytest.raises(ValueError, match="image must be"):
             detector.detect(np.zeros((10, 10, 4), dtype=np.uint8))
+        assert detector._process is None
 
 
 def test_camera_matrix_validation(fake_worker: Path) -> None:
@@ -91,10 +96,29 @@ def test_camera_matrix_validation(fake_worker: Path) -> None:
 
 def test_context_manager_closes_worker(fake_worker: Path) -> None:
     detector = Detector(worker_path=fake_worker)
+    assert detector._process is None
+    detector.detect(np.zeros((8, 8), dtype=np.uint8))
     process = detector._process
+    assert process is not None
     detector.close()
     assert process.poll() == 0
     detector.close()  # idempotent
+
+
+def test_close_before_first_detection_does_not_start_worker(fake_worker: Path) -> None:
+    detector = Detector(worker_path=fake_worker)
+    detector.close()
+    assert detector._process is None
+    assert not detector.ping()
+
+
+def test_missing_worker_is_resolved_only_when_detection_starts(tmp_path: Path) -> None:
+    missing_worker = tmp_path / "not-built-yet" / "faruco_worker"
+    detector = Detector(worker_path=missing_worker)
+    assert detector._process is None
+    with pytest.raises(WorkerNotFoundError):
+        detector.detect(np.zeros((8, 8), dtype=np.uint8))
+    detector.close()
 
 
 def test_generator_uses_only_upstream_supported_controls(

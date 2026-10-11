@@ -220,6 +220,8 @@ def generate_marker(
 class Detector:
     """Persistent client for ArUco2's Fractal ArUco detector.
 
+    The native worker is started lazily on the first valid call to ``detect()``.
+
     Parameters
     ----------
     fractal_type:
@@ -261,11 +263,12 @@ class Detector:
         self.include_points = bool(include_points)
         self._request_id = 0
         self._closed = False
+        self._worker_path = worker_path
         import threading
         self._lock = threading.Lock()
-        executable = _resolve_worker(worker_path)
-        command = [
-            executable, "worker", "--type", self.fractal_type,
+        self._process: Optional[subprocess.Popen[bytes]] = None
+        self._command_args = [
+            "worker", "--type", self.fractal_type,
             "--marker-size", format(self.marker_size_m, ".17g"),
         ]
 
@@ -281,27 +284,41 @@ class Detector:
                     raise ValueError("dist_coeffs must contain 4, 5, 8, 12, or 14 values")
                 if not np.all(np.isfinite(dist)):
                     raise ValueError("dist_coeffs must contain only finite numbers")
-            command.extend([
+            self._command_args.extend([
                 "--camera-matrix", ",".join(format(float(x), ".17g") for x in camera.reshape(-1)),
                 "--dist-coeffs", ",".join(format(float(x), ".17g") for x in dist),
             ])
 
-        self._process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=None,  # Do not pipe diagnostics: avoids a full stderr pipe blocking the worker.
-            bufsize=-1,
-        )
-        try:
-            assert self._process.stdout is not None
-            ready = read_json_line(self._process.stdout)
-            if (not ready.get("ok") or ready.get("event") != "ready" or
-                    ready.get("protocol_version") != PROTOCOL_VERSION):
-                raise ProtocolError(f"Unexpected worker startup response: {ready}")
-        except Exception:
-            self._terminate_worker()
-            raise
+    def _ensure_started(self) -> None:
+        """Start the persistent worker on the first valid detection request."""
+        with self._lock:
+            if self._closed:
+                raise WorkerError("FArUco worker is closed")
+
+            if self._process is not None:
+                if self._process.poll() is not None:
+                    raise WorkerError("FArUco worker is closed or has exited")
+                return
+
+            executable = _resolve_worker(self._worker_path)
+            command = [executable, *self._command_args]
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=None,  # Do not pipe diagnostics: avoids a full stderr pipe blocking the worker.
+                bufsize=-1,
+            )
+            self._process = process
+            try:
+                assert process.stdout is not None
+                ready = read_json_line(process.stdout)
+                if (not ready.get("ok") or ready.get("event") != "ready" or
+                        ready.get("protocol_version") != PROTOCOL_VERSION):
+                    raise ProtocolError(f"Unexpected worker startup response: {ready}")
+            except Exception:
+                self._terminate_worker()
+                raise
 
     def detect(self, image: Any, include_points: Optional[bool] = None) -> DetectionResult:
         """Detect fractal markers in a uint8 grayscale or BGR NumPy image.
@@ -309,8 +326,8 @@ class Detector:
         Frames are sent as contiguous raw bytes through the worker's persistent pipe.
         The method is synchronous: it returns when the worker completes that frame.
         """
-        if self._closed or self._process.poll() is not None:
-            raise WorkerError("FArUco worker is closed or has exited")
+        if self._closed:
+            raise WorkerError("FArUco worker is closed")
         frame = np.asarray(image)
         if frame.dtype != np.uint8:
             raise ValueError(f"image must have dtype uint8, got {frame.dtype}")
@@ -330,19 +347,21 @@ class Detector:
         if len(payload) > 256 * 1024 * 1024:
             raise ValueError("image exceeds the 256 MiB worker protocol limit")
         use_points = self.include_points if include_points is None else bool(include_points)
+        self._ensure_started()
 
         with self._lock:
-            if self._closed or self._process.poll() is not None:
+            process = self._process
+            if self._closed or process is None or process.poll() is not None:
                 raise WorkerError("FArUco worker is closed or has exited")
             self._request_id += 1
             request_id = self._request_id
             header = f"DETECT {request_id} {width} {height} {channels} {len(payload)} {1 if use_points else 0}\n".encode("ascii")
             try:
-                assert self._process.stdin is not None and self._process.stdout is not None
-                self._process.stdin.write(header)
-                self._process.stdin.write(payload)
-                self._process.stdin.flush()
-                response = read_json_line(self._process.stdout)
+                assert process.stdin is not None and process.stdout is not None
+                process.stdin.write(header)
+                process.stdin.write(payload)
+                process.stdin.flush()
+                response = read_json_line(process.stdout)
             except (BrokenPipeError, OSError, ProtocolError) as exc:
                 raise WorkerError(f"Communication with FArUco worker failed: {exc}") from exc
 
@@ -363,16 +382,18 @@ class Detector:
             raise ProtocolError(f"Malformed detection payload: {exc}") from exc
 
     def ping(self) -> bool:
-        """Check that the worker can respond to a command."""
-        if self._closed or self._process.poll() is not None:
+        """Check worker health without starting an uninitialized worker."""
+        process = self._process
+        if self._closed or process is None or process.poll() is not None:
             return False
         with self._lock:
-            if self._closed or self._process.poll() is not None:
+            process = self._process
+            if self._closed or process is None or process.poll() is not None:
                 return False
-            assert self._process.stdin is not None and self._process.stdout is not None
-            self._process.stdin.write(encode_command("PING"))
-            self._process.stdin.flush()
-            response = read_json_line(self._process.stdout)
+            assert process.stdin is not None and process.stdout is not None
+            process.stdin.write(encode_command("PING"))
+            process.stdin.flush()
+            response = read_json_line(process.stdout)
         return bool(response.get("ok") and response.get("event") == "pong")
 
     def close(self) -> None:
@@ -387,6 +408,8 @@ class Detector:
                 return
             self._closed = True
             process = self._process
+            if process is None:
+                return
             if process.poll() is None:
                 try:
                     assert process.stdin is not None
