@@ -8,18 +8,10 @@ Without calibration the example still displays outer-corner detections, but not 
 from __future__ import annotations
 
 import argparse
-import sys
 import time
-from pathlib import Path
 
 import cv2
 import numpy as np
-
-# Allow this demo to run directly from a bridge checkout without installing the
-# Python package or requiring the caller to set PYTHONPATH.
-BRIDGE_ROOT = Path(__file__).resolve().parents[1]
-if str(BRIDGE_ROOT) not in sys.path:
-    sys.path.insert(0, str(BRIDGE_ROOT))
 
 import faruco_bridge as faruco
 
@@ -30,7 +22,6 @@ def main() -> int:
     parser.add_argument("--type", default="FRACTAL_3L_6", choices=faruco.SUPPORTED_FRACTAL_TYPES)
     parser.add_argument("--marker-size", type=float, default=0.10, help="Outer marker side length in metres")
     parser.add_argument("--calibration", help="Optional NPZ containing camera_matrix and dist_coeffs")
-    parser.add_argument("--worker", help="Path to faruco_worker; can also use FARUCO_WORKER")
     args = parser.parse_args()
 
     camera_matrix = dist_coeffs = None
@@ -49,7 +40,6 @@ def main() -> int:
             marker_size_m=args.marker_size,
             camera_matrix=camera_matrix,
             dist_coeffs=dist_coeffs,
-            worker_path=args.worker,
         ) as detector:
             recent_fps = 0.0
             last_time = time.perf_counter()
