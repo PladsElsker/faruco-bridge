@@ -169,3 +169,49 @@ def test_resolves_worker_bundled_inside_python_package(
     monkeypatch.setattr(client_module, "__file__", str(package_dir / "client.py"))
     monkeypatch.delenv("FARUCO_WORKER", raising=False)
     assert client_module._resolve_worker() == str(worker.resolve())
+
+
+def test_resolves_installed_worker_when_source_checkout_shadows_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Launching an example from the checkout must still find pip's worker."""
+    import sys
+    import faruco_bridge.client as client_module
+
+    source_root = tmp_path / "checkout"
+    source_package = source_root / "faruco_bridge"
+    source_package.mkdir(parents=True)
+    # A local egg-info is often present after building/installing from source.
+    egg_info = source_root / "faruco_bridge.egg-info"
+    egg_info.mkdir()
+    (egg_info / "PKG-INFO").write_text(
+        "Metadata-Version: 2.1\nName: faruco-bridge\nVersion: 0.0.1\n",
+        encoding="utf-8",
+    )
+
+    site_packages = tmp_path / "venv" / "site-packages"
+    package_dir = site_packages / "faruco_bridge"
+    bin_dir = package_dir / "bin"
+    bin_dir.mkdir(parents=True)
+    worker = bin_dir / "faruco_worker"
+    worker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    worker.chmod(0o755)
+    dist_info = site_packages / "faruco_bridge-0.0.1.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: faruco-bridge\nVersion: 0.0.1\n",
+        encoding="utf-8",
+    )
+
+    # Put the source checkout first, just as happens when running
+    # `python examples/screen_capture_demo.py` from the repository root.
+    monkeypatch.setattr(sys, "path", [str(source_root), str(site_packages), *sys.path])
+    monkeypatch.setattr(client_module, "__file__", str(source_package / "client.py"))
+    monkeypatch.delenv("FARUCO_WORKER", raising=False)
+    empty_path = tmp_path / "empty-path"
+    empty_path.mkdir()
+    monkeypatch.setenv("PATH", str(empty_path))
+
+    distributions = list(client_module.metadata.distributions(name="faruco-bridge"))
+    assert len(distributions) >= 2  # local egg-info plus the installed distribution
+    assert client_module._resolve_worker() == str(worker.resolve())

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from importlib import metadata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -161,6 +162,28 @@ def _resolve_worker(worker_path: Optional[os.PathLike[str] | str] = None) -> str
         package_root / "build" / "faruco_worker",
         package_root / "build" / "bin" / "faruco_worker",
     ])
+
+    # Running an example directly from a source checkout puts that checkout
+    # first on sys.path. Its faruco_bridge package (and possibly a local
+    # faruco_bridge.egg-info directory) shadows the installed Python package,
+    # even though pip has installed the native worker in site-packages. Search
+    # every matching distribution rather than metadata.distribution(...), which
+    # may resolve to the checkout's local egg-info first.
+    relative_worker = Path("faruco_bridge") / "bin" / bundled_name
+    try:
+        distributions = metadata.distributions(name="faruco-bridge")
+        for distribution in distributions:
+            try:
+                candidates.append(Path(distribution.locate_file(relative_worker)))
+            except (AttributeError, OSError, TypeError, ValueError):
+                # A malformed/incomplete metadata entry should not prevent
+                # another installed distribution from supplying the worker.
+                continue
+    except (OSError, TypeError, ValueError):
+        # Worker discovery should still support source builds and PATH below
+        # if distribution metadata cannot be enumerated.
+        pass
+
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate.resolve())
@@ -172,8 +195,8 @@ def _resolve_worker(worker_path: Optional[os.PathLike[str] | str] = None) -> str
     if found:
         return found
     raise WorkerNotFoundError(
-        "Could not find 'faruco_worker'. Build it with CMake, put it on PATH, "
-        "pass worker_path=..., or set FARUCO_WORKER to the executable path."
+        "The FArUco native component is missing from this installation. "
+        "Reinstall faruco-bridge; if the problem persists, the installation may be incomplete."
     )
 
 

@@ -8,18 +8,14 @@ The worker is compiled automatically while the platform-specific Python wheel is
 
 These instructions target Kubuntu/Ubuntu and Raspberry Pi OS/Debian. The native worker is compiled on the machine where the package is installed, so build it on the target machine for Raspberry Pi/ARM deployments.
 
-### 1. Get the source, including ArUco2
+### 1. Get the source
 
 ```bash
-git clone --recurse-submodules https://github.com/PladsElsker/faruco-bridge.git
+git clone https://github.com/PladsElsker/faruco-bridge.git
 cd faruco-bridge
 ```
 
-If you already cloned without submodules, initialize them:
-
-```bash
-git submodule update --init --recursive
-```
+ArUco2 is fetched from `https://github.com/PladsElsker/aruco2.git` automatically into the temporary build directory when the wheel is built. No ArUco2 checkout or Git submodule setup is needed in the project tree.
 
 ### 2. Install the native build dependencies
 
@@ -43,7 +39,7 @@ python -m pip install .
 
 The C++ build uses two parallel jobs by default to avoid exhausting memory on small Raspberry Pi boards. Increase the job count if desired, for example `FARUCO_BUILD_JOBS=4 python -m pip install .`.
 
-During `pip install .`, the package build configures CMake, compiles `faruco_worker`, and places it in the wheel. The resulting wheel is platform-specific (OS/CPU architecture), and the build needs the ArUco2 submodule to be present. Python OpenCV is optional; install it only for `DetectionResult.annotate()` or the webcam example:
+During `pip install .`, the package build shallow-clones the default branch of the ArUco2 fork into the temporary build directory, configures CMake, compiles `faruco_worker`, and places the executable and ArUco2 license in the wheel. The project checkout itself does not contain ArUco2 as a submodule. The resulting wheel is platform-specific (OS/CPU architecture), and the build needs network access to GitHub. Python OpenCV is optional; install it only for `DetectionResult.annotate()` or the webcam example:
 
 ```bash
 python -m pip install '.[opencv]'
@@ -57,23 +53,11 @@ From the host application's root:
 
 ```bash
 git submodule add https://github.com/PladsElsker/faruco-bridge.git third_party/faruco_bridge
-git submodule update --init --recursive
-sudo apt install -y build-essential cmake pkg-config libopencv-dev
+sudo apt install -y build-essential cmake git pkg-config libopencv-dev
 python -m pip install ./third_party/faruco_bridge
 ```
 
-The `pip install` command compiles and bundles the worker into the active Python environment. You do not need separate `cmake` commands or an `FARUCO_WORKER` setting. Ensure the submodule is checked out with its ArUco2 submodule initialized before building.
-
-### Development build
-
-To build a standalone worker for C++ development or debugging, CMake can still be invoked directly:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j2
-```
-
-The standalone executable is written to `build/faruco_worker`. For a custom ArUco2 checkout, configure with `-DARUCO2_ROOT=/path/to/aruco2`.
+The `pip install` command fetches ArUco2, compiles and bundles the worker into the active Python environment. You do not need to initialize nested submodules, run separate CMake commands, or set `FARUCO_WORKER`.
 
 ## Lazy worker startup
 
@@ -96,11 +80,13 @@ output = generate_marker(
 print(output)
 ```
 
-For C++ worker CLI debugging, build the standalone executable using the CMake commands in the Development build section above.
-
-### Native worker generator arguments
-
-The following options apply to the standalone C++ worker CLI used for development; the Python `generate_marker()` API exposes the corresponding `fractal_type`, `bit_size`, and `output` parameters.
+### Command-line usage
+```sh
+python -m faruco_generator \
+    --type FRACTAL_3L_6 \
+    --bit-size 20 \
+    --output fractal_3l_6.png
+```
 
 | Argument | Default | Meaning |
 |---|---|---|

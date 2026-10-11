@@ -14,6 +14,7 @@ from setuptools.dist import Distribution
 from setuptools.command.bdist_wheel import bdist_wheel
 
 ROOT = Path(__file__).resolve().parent
+ARUCO2_REPOSITORY = "https://github.com/PladsElsker/aruco2.git"
 WORKER_FILENAME = "faruco_worker.exe" if os.name == "nt" else "faruco_worker"
 
 
@@ -63,21 +64,44 @@ class BuildPyWithCMake(build_py):
                 "then install the system OpenCV development package (for example, libopencv-dev)."
             )
 
-        aruco_root = ROOT / "third_party" / "aruco2"
+        build_command = self.get_finalized_command("build")
+        build_temp = Path(build_command.build_temp).resolve()
+        build_temp.mkdir(parents=True, exist_ok=True)
+        cmake_build_dir = build_temp / "faruco-cmake"
+        aruco_root = build_temp / "faruco-aruco2-source"
+
+        # ArUco2 is fetched into setuptools' temporary build directory rather
+        # than kept as a Git submodule or copied into the user's source tree.
+        git = os.environ.get("GIT") or shutil.which("git")
+        if not git:
+            raise RuntimeError(
+                "Git is required to build faruco-bridge because the build fetches "
+                f"ArUco2 from {ARUCO2_REPOSITORY}. Install Git and retry."
+            )
+        if aruco_root.exists():
+            shutil.rmtree(aruco_root)
+        try:
+            subprocess.check_call(
+                [git, "clone", "--depth", "1", "--single-branch", ARUCO2_REPOSITORY, str(aruco_root)],
+                cwd=build_temp,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Could not fetch ArUco2 from {ARUCO2_REPOSITORY}. Check Git/network access and retry."
+            ) from exc
+
         required_sources = (
             aruco_root / "opencv2" / "objdetect" / "aruco2.hpp",
             aruco_root / "src" / "aruco2_fractal.cpp",
+            aruco_root / "LICENSE",
         )
         missing = [str(path) for path in required_sources if not path.is_file()]
         if missing:
             raise RuntimeError(
-                "The ArUco2 source submodule is missing or incomplete. Clone the repository "
-                "with --recurse-submodules, or run 'git submodule update --init --recursive'. "
-                "Missing: " + ", ".join(missing)
+                "The ArUco2 repository was cloned but is missing required build files: "
+                + ", ".join(missing)
             )
 
-        build_command = self.get_finalized_command("build")
-        cmake_build_dir = Path(build_command.build_temp).resolve() / "faruco-cmake"
         cmake_build_dir.mkdir(parents=True, exist_ok=True)
         install_prefix = self._install_prefix()
         install_prefix.mkdir(parents=True, exist_ok=True)
@@ -93,6 +117,9 @@ class BuildPyWithCMake(build_py):
         # requiring project-specific setup.py changes.
         extra_args = shlex.split(os.environ.get("CMAKE_ARGS", ""))
         configure.extend(extra_args)
+        # This package build always uses the freshly fetched fork. CMAKE_ARGS
+        # remains available for toolchain/OpenCV options.
+        configure.append(f"-DARUCO2_ROOT={aruco_root}")
         subprocess.check_call(configure, cwd=ROOT)
 
         parallelism = os.environ.get("FARUCO_BUILD_JOBS", "2")
@@ -119,8 +146,6 @@ class BuildPyWithCMake(build_py):
 
         # Preserve the upstream license alongside the bundled native executable.
         license_source = aruco_root / "LICENSE"
-        if not license_source.is_file():
-            raise RuntimeError(f"The ArUco2 license file was not found: {license_source}")
         license_output = self._license_output()
         license_output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(license_source, license_output)
