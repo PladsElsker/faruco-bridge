@@ -82,7 +82,7 @@ print(output)
 
 ### Command-line usage
 ```sh
-python -m faruco_generator \
+python -m generator \
     --type FRACTAL_3L_6 \
     --bit-size 20 \
     --output fractal_3l_6.png
@@ -172,13 +172,13 @@ If `camera_matrix` is supplied but `dist_coeffs` is omitted, five zero distortio
 After installing the package, run:
 
 ```bash
-python examples/webcam_demo.py --camera 0 --type FRACTAL_3L_6
+python examples/webcam.py --camera 0 --type FRACTAL_3L_6
 ```
 
 The example expects the package to be installed; an editable install builds the worker into the checkout. An optional NPZ calibration file can contain arrays named `camera_matrix` and `dist_coeffs`:
 
 ```bash
-python3 examples/webcam_demo.py --camera 0 --calibration calibration.npz
+python3 examples/webcam.py --camera 0 --calibration calibration.npz
 ```
 
 Press `q` or Escape to exit.
