@@ -20,8 +20,8 @@ The build needs network access to GitHub to fetch ArUco2. The native worker link
 ```bash
 git clone https://github.com/PladsElsker/faruco-bridge.git
 cd faruco-bridge
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 python -m pip install --upgrade pip
 ```
 
