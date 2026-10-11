@@ -1,0 +1,7 @@
+include README.md
+include CMakeLists.txt
+include setup.py
+include pyproject.toml
+recursive-include cpp *.cpp
+recursive-include faruco_bridge *.py
+include scripts/bootstrap_aruco2.sh

@@ -1,0 +1,10 @@
+/build/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+venv/
+*.png
+dist/
+/faruco_bridge/bin/
+/faruco_bridge/licenses/ARUCO2-LICENSE.txt

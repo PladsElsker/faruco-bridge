@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=70.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faruco-bridge"
+version = "0.0.1"
+description = "Python client for the ArUco2 Fractal ArUco C++ worker"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.23"]
+
+[project.optional-dependencies]
+opencv = ["opencv-python>=4.8"]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["faruco_bridge"]
