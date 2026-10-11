@@ -1,0 +1,427 @@
+diff --git a/.gitignore b/.gitignore
+index c2b59c5..b865f82 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,3 +6,5 @@ __pycache__/
+ venv/
+ *.png
+ dist/
++/faruco_bridge/bin/
++/faruco_bridge/licenses/ARUCO2-LICENSE.txt
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1a508de..3b4d074 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -69,3 +69,7 @@ endif()
+ 
+ message(STATUS "FArUco bridge: OpenCV ${OpenCV_VERSION}")
+ message(STATUS "ArUco2 source: ${ARUCO2_ROOT}")
++
++# setup.py installs this executable into faruco_bridge/bin in the wheel's
++# build_lib directory. The same install rule also supports editable installs.
++install(TARGETS faruco_worker RUNTIME DESTINATION faruco_bridge/bin)
+diff --git a/MANIFEST.in b/MANIFEST.in
+new file mode 100644
+index 0000000..efe14a0
+--- /dev/null
++++ b/MANIFEST.in
+@@ -0,0 +1,7 @@
++include CMakeLists.txt
++include README.md
++include pyproject.toml
++include setup.py
++recursive-include cpp *.cpp *.hpp *.h
++recursive-include faruco_bridge *.py
++recursive-include third_party/aruco2 *.cpp *.hpp *.h *.cl *.cmake CMakeLists.txt *.md LICENSE
+diff --git a/README.md b/README.md
+index 78a7520..df97187 100644
+--- a/README.md
++++ b/README.md
+@@ -1,14 +1,14 @@
+ # FArUco Bridge
+ 
+-A Python client for **ArUco2's Fractal ArUco (FArUco) implementation**. The Python package communicates with a separately compiled C++ worker over a persistent stdin/stdout pipe. Detection and marker generation remain in ArUco2's C++ implementation.
++A Python client for **ArUco2's Fractal ArUco (FArUco) implementation**. The Python package communicates with a persistent C++ worker over stdin/stdout. Detection and marker generation run in ArUco2's C++ implementation.
+ 
+-The Python client is an installable package (`faruco-bridge`). The `faruco_worker` executable is built separately for the target machine; it is not bundled into the Python wheel.
++The worker is compiled automatically while the platform-specific Python wheel is built and is bundled inside `faruco_bridge/bin/`. You normally do not need to run CMake yourself or set `FARUCO_WORKER`.
+ 
+ ## Install from source
+ 
+-These instructions are for Kubuntu/Ubuntu and Raspberry Pi OS/Debian. Build the native executable on each target machine, including the Raspberry Pi itself when targeting ARM.
++These instructions target Kubuntu/Ubuntu and Raspberry Pi OS/Debian. The native worker is compiled on the machine where the package is installed, so build it on the target machine for Raspberry Pi/ARM deployments.
+ 
+-### 1. Get the source and ArUco2 submodule
++### 1. Get the source, including ArUco2
+ 
+ ```bash
+ git clone --recurse-submodules https://github.com/PladsElsker/faruco-bridge.git
+@@ -21,25 +21,18 @@ If you already cloned without submodules, initialize them:
+ git submodule update --init --recursive
+ ```
+ 
+-### 2. Install native build dependencies
++### 2. Install the native build dependencies
+ 
+-```bash
+-sudo apt update
+-sudo apt install -y build-essential cmake git pkg-config libopencv-dev
+-```
+-
+-### 3. Compile the C++ worker
++`pip` invokes CMake during wheel construction. The system therefore needs a C++17 compiler, CMake, and OpenCV development files before installing the Python package:
+ 
+ ```bash
+-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+-cmake --build build -j2
++sudo apt update
++sudo apt install -y build-essential cmake git pkg-config libopencv-dev python3-venv
+ ```
+ 
+-The executable should be at `build/faruco_worker`. CMake requires the ArUco2 submodule in `third_party/aruco2`. For a custom ArUco2 checkout, configure with `-DARUCO2_ROOT=/path/to/aruco2`.
++`libopencv-dev` also installs the OpenCV shared libraries the worker needs at runtime. The wheel bundles `faruco_worker` and the ArUco2 license, but does not bundle OpenCV's shared libraries.
+ 
+-### 4. Install the Python package
+-
+-Create a virtual environment and install the project from the bridge root:
++### 3. Install the Python package
+ 
+ ```bash
+ python3 -m venv .venv
+@@ -48,15 +41,15 @@ python -m pip install --upgrade pip
+ python -m pip install .
+ ```
+ 
+-NumPy is installed as a Python dependency. Python OpenCV is optional and is only needed for the webcam example and `DetectionResult.annotate()`; install it with `python -m pip install '.[opencv]'` if required. The C++ build still requires the system OpenCV development package from step 2.
++The C++ build uses two parallel jobs by default to avoid exhausting memory on small Raspberry Pi boards. Increase the job count if desired, for example `FARUCO_BUILD_JOBS=4 python -m pip install .`.
+ 
+-Tell the installed package where the separately compiled executable is located:
++During `pip install .`, the package build configures CMake, compiles `faruco_worker`, and places it in the wheel. The resulting wheel is platform-specific (OS/CPU architecture), and the build needs the ArUco2 submodule to be present. Python OpenCV is optional; install it only for `DetectionResult.annotate()` or the webcam example:
+ 
+ ```bash
+-export FARUCO_WORKER="$PWD/build/faruco_worker"
++python -m pip install '.[opencv]'
+ ```
+ 
+-Keep this environment variable set in the shell or service that runs your application. Alternatively, put `faruco_worker` on `PATH`, or pass `worker_path="/absolute/path/to/faruco_worker"` to `Detector` and `generate_marker`. The worker starts only when the first valid `Detector.detect()` call is made.
++The normal Python API locates the bundled worker automatically. You can still override it using `worker_path=...` or `FARUCO_WORKER` when testing another build.
+ 
+ ### Installing as a submodule in another application
+ 
+@@ -65,13 +58,22 @@ From the host application's root:
+ ```bash
+ git submodule add https://github.com/PladsElsker/faruco-bridge.git third_party/faruco_bridge
+ git submodule update --init --recursive
+-cmake -S third_party/faruco_bridge -B third_party/faruco_bridge/build -DCMAKE_BUILD_TYPE=Release
+-cmake --build third_party/faruco_bridge/build -j2
++sudo apt install -y build-essential cmake pkg-config libopencv-dev
+ python -m pip install ./third_party/faruco_bridge
+-export FARUCO_WORKER="$PWD/third_party/faruco_bridge/build/faruco_worker"
+ ```
+ 
+-This installs the Python package into the active Python environment while keeping the C++ worker and ArUco2 source within the submodule checkout. The executable must be compiled for the host application's target architecture.
++The `pip install` command compiles and bundles the worker into the active Python environment. You do not need separate `cmake` commands or an `FARUCO_WORKER` setting. Ensure the submodule is checked out with its ArUco2 submodule initialized before building.
++
++### Development build
++
++To build a standalone worker for C++ development or debugging, CMake can still be invoked directly:
++
++```bash
++cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
++cmake --build build -j2
++```
++
++The standalone executable is written to `build/faruco_worker`. For a custom ArUco2 checkout, configure with `-DARUCO2_ROOT=/path/to/aruco2`.
+ 
+ ## Lazy worker startup
+ 
+@@ -81,22 +83,24 @@ Constructing a `Detector` validates its configuration but does not start a proce
+ 
+ The bridge uses ArUco2's **existing Fractal ArUco generator**. It exposes the upstream generator's supported choices; it does not define a new marker format or add custom per-level geometry.
+ 
+-From the bridge checkout:
++Generate a marker through the bundled worker using the Python API:
+ 
+-```bash
+-./build/faruco_worker generate \
+-  --type FRACTAL_3L_6 \
+-  --bit-size 20 \
+-  --output fractal_3l_6.png
++```python
++from faruco_bridge import generate_marker
++
++output = generate_marker(
++    fractal_type="FRACTAL_3L_6",
++    output="fractal_3l_6.png",
++    bit_size=20,
++)
++print(output)
+ ```
+ 
+-Show the generation-specific command help at any time:
++For C++ worker CLI debugging, build the standalone executable using the CMake commands in the Development build section above.
+ 
+-```bash
+-./build/faruco_worker generate --help
+-```
++### Native worker generator arguments
+ 
+-### Generator arguments
++The following options apply to the standalone C++ worker CLI used for development; the Python `generate_marker()` API exposes the corresponding `fractal_type`, `bit_size`, and `output` parameters.
+ 
+ | Argument | Default | Meaning |
+ |---|---|---|
+@@ -179,13 +183,13 @@ If `camera_matrix` is supplied but `dist_coeffs` is omitted, five zero distortio
+ 
+ ## Webcam example
+ 
+-After compiling the worker and setting `FARUCO_WORKER`, run:
++After installing the package, run:
+ 
+ ```bash
+ python examples/webcam_demo.py --camera 0 --type FRACTAL_3L_6
+ ```
+ 
+-The example can also run directly from the checkout without installing the package. An optional NPZ calibration file can contain arrays named `camera_matrix` and `dist_coeffs`:
++The example expects the package to be installed; an editable install builds the worker into the checkout. An optional NPZ calibration file can contain arrays named `camera_matrix` and `dist_coeffs`:
+ 
+ ```bash
+ python3 examples/webcam_demo.py --camera 0 --calibration calibration.npz
+@@ -195,14 +199,14 @@ Press `q` or Escape to exit.
+ 
+ ## Tests
+ 
+-The client/protocol tests use a fake worker, so they do not require an ArUco2 checkout or a working native build. Install the development test dependency and run them with:
++The client/protocol tests use a fake worker. From the repository root, install the Python test dependencies and run them without triggering the native wheel build:
+ 
+ ```bash
+-python -m pip install -e '.[test]'
+-python -m pytest -q
++python -m pip install numpy pytest
++PYTHONPATH=. python -m pytest -q
+ ```
+ 
+-A native smoke test must still be performed on a machine with ArUco2 and the OpenCV development libraries installed: generate a marker, detect it in a saved or rendered frame, and check corner and pose-point output.
++To test a full editable installation, use `python -m pip install -e '.[test]'`; this also compiles the native worker and therefore requires the native build dependencies from step 2. A native smoke test should be performed on the target machine: generate a marker, detect it in a saved or rendered frame, and check corner and pose-point output.
+ 
+ ## Worker protocol v1
+ 
+@@ -215,10 +219,10 @@ DETECT <request_id> <width> <height> <channels> <payload_bytes> <include_points>
+ 
+ `channels` is `1` for grayscale or `3` for BGR, with interleaved row-major `uint8` pixels. Responses are one JSON object per line. `PING` and `QUIT` provide health-check and shutdown commands. Stdout is reserved for protocol messages; diagnostics go to stderr.
+ 
+-The worker starts lazily on the first valid detection and is then reused. The protocol is synchronous: Python sends one frame and waits for its result before sending another. This avoids per-frame process startup and image re-encoding, while keeping the initial implementation simple. It does not yet implement asynchronous pipelining or shared-memory transport.
++The bundled worker starts lazily on the first valid detection and is then reused. The protocol is synchronous: Python sends one frame and waits for its result before sending another. This avoids per-frame process startup and image re-encoding, while keeping the initial implementation simple. It does not yet implement asynchronous pipelining or shared-memory transport.
+ 
+ ## Notes and limitations
+ 
+-- The C++ executable is built for the host architecture and links to that machine's OpenCV libraries.
++- The wheel contains a worker built for the host architecture and links to that machine's OpenCV libraries. The wheel itself is not a portable, pure-Python wheel.
+ - The executable being compiled confirms build success, not detection or pose accuracy. Validate with known images and the intended camera calibration.
+ - ArUco2's fractal point API behaves differently depending on the number of detected markers. Test single- and multi-marker cases before relying on full inner/outer correspondences for pose estimation.
+diff --git a/faruco_bridge/client.py b/faruco_bridge/client.py
+index dc1c15f..b468b35 100644
+--- a/faruco_bridge/client.py
++++ b/faruco_bridge/client.py
+@@ -149,9 +149,14 @@ def _resolve_worker(worker_path: Optional[os.PathLike[str] | str] = None) -> str
+     if env_worker:
+         candidates.append(Path(env_worker).expanduser())
+ 
+-    # The worker is built into the bridge checkout. This also works when the
+-    # bridge is checked out as a Git submodule.
+-    package_root = Path(__file__).resolve().parents[1]
++    # Normal wheel installs bundle the platform-built executable beside this
++    # module. An explicit path or FARUCO_WORKER takes precedence for overrides.
++    package_dir = Path(__file__).resolve().parent
++    bundled_name = "faruco_worker.exe" if os.name == "nt" else "faruco_worker"
++    candidates.append(package_dir / "bin" / bundled_name)
++
++    # Keep support for source checkouts and manually compiled development builds.
++    package_root = package_dir.parent
+     candidates.extend([
+         package_root / "build" / "faruco_worker",
+         package_root / "build" / "bin" / "faruco_worker",
+diff --git a/pyproject.toml b/pyproject.toml
+index 76819f4..381b1ab 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,5 +1,5 @@
+ [build-system]
+-requires = ["setuptools>=68", "wheel"]
++requires = ["setuptools>=70.1"]
+ build-backend = "setuptools.build_meta"
+ 
+ [project]
+diff --git a/setup.py b/setup.py
+new file mode 100644
+index 0000000..15f81a7
+--- /dev/null
++++ b/setup.py
+@@ -0,0 +1,142 @@
++"""Build the platform-specific Python wheel and its native C++ worker."""
++
++from __future__ import annotations
++
++import os
++import shutil
++import shlex
++import subprocess
++from pathlib import Path
++
++from setuptools import setup
++from setuptools.command.build_py import build_py
++from setuptools.dist import Distribution
++from setuptools.command.bdist_wheel import bdist_wheel
++
++ROOT = Path(__file__).resolve().parent
++WORKER_FILENAME = "faruco_worker.exe" if os.name == "nt" else "faruco_worker"
++
++
++class BinaryDistribution(Distribution):
++    """Tell wheel that the package contains a compiled, platform-specific worker."""
++
++    def has_ext_modules(self) -> bool:
++        # The native executable has no Python ABI dependency, but the wheel is
++        # still OS/architecture-specific. BinaryWheel below gives it a py3-none tag.
++        return True
++
++
++class BinaryWheel(bdist_wheel):
++    """Tag the bundled executable wheel by platform, not Python ABI."""
++
++    def get_tag(self) -> tuple[str, str, str]:
++        _python_tag, _abi_tag, platform_tag = super().get_tag()
++        return "py3", "none", platform_tag
++
++
++class BuildPyWithCMake(build_py):
++    """Compile faruco_worker and place it inside the installed Python package."""
++
++    def _is_editable(self) -> bool:
++        return bool(getattr(self, "editable_mode", False))
++
++    def _install_prefix(self) -> Path:
++        # Editable installs need the executable beside the source package.
++        # Regular wheel builds install it into build_lib, which becomes site-packages.
++        if self._is_editable():
++            return ROOT
++        return Path(self.build_lib).resolve()
++
++    def _worker_output(self) -> Path:
++        return self._install_prefix() / "faruco_bridge" / "bin" / WORKER_FILENAME
++
++    def _license_output(self) -> Path:
++        return self._install_prefix() / "faruco_bridge" / "licenses" / "ARUCO2-LICENSE.txt"
++
++    def run(self) -> None:
++        super().run()
++
++        cmake = os.environ.get("CMAKE") or shutil.which("cmake")
++        if not cmake:
++            raise RuntimeError(
++                "CMake is required to build faruco-bridge. Install CMake and a C++17 compiler, "
++                "then install the system OpenCV development package (for example, libopencv-dev)."
++            )
++
++        aruco_root = ROOT / "third_party" / "aruco2"
++        required_sources = (
++            aruco_root / "opencv2" / "objdetect" / "aruco2.hpp",
++            aruco_root / "src" / "aruco2_fractal.cpp",
++        )
++        missing = [str(path) for path in required_sources if not path.is_file()]
++        if missing:
++            raise RuntimeError(
++                "The ArUco2 source submodule is missing or incomplete. Clone the repository "
++                "with --recurse-submodules, or run 'git submodule update --init --recursive'. "
++                "Missing: " + ", ".join(missing)
++            )
++
++        build_command = self.get_finalized_command("build")
++        cmake_build_dir = Path(build_command.build_temp).resolve() / "faruco-cmake"
++        cmake_build_dir.mkdir(parents=True, exist_ok=True)
++        install_prefix = self._install_prefix()
++        install_prefix.mkdir(parents=True, exist_ok=True)
++
++        configure = [
++            cmake,
++            "-S", str(ROOT),
++            "-B", str(cmake_build_dir),
++            "-DCMAKE_BUILD_TYPE=Release",
++            f"-DCMAKE_INSTALL_PREFIX={install_prefix}",
++        ]
++        # Honour CMAKE_ARGS for custom toolchains or OpenCV locations without
++        # requiring project-specific setup.py changes.
++        extra_args = shlex.split(os.environ.get("CMAKE_ARGS", ""))
++        configure.extend(extra_args)
++        subprocess.check_call(configure, cwd=ROOT)
++
++        parallelism = os.environ.get("FARUCO_BUILD_JOBS", "2")
++        if not parallelism.isdigit() or int(parallelism) < 1:
++            raise RuntimeError("FARUCO_BUILD_JOBS must be a positive integer")
++        subprocess.check_call(
++            [cmake, "--build", str(cmake_build_dir), "--config", "Release",
++             "--target", "faruco_worker", "--parallel", parallelism],
++            cwd=ROOT,
++        )
++        subprocess.check_call(
++            [cmake, "--install", str(cmake_build_dir), "--config", "Release"],
++            cwd=ROOT,
++        )
++
++        worker = self._worker_output()
++        if not worker.is_file():
++            raise RuntimeError(
++                f"CMake completed but the installed worker was not found at {worker}. "
++                "Check the CMake install rule for faruco_worker."
++            )
++        if os.name != "nt":
++            worker.chmod(worker.stat().st_mode | 0o111)
++
++        # Preserve the upstream license alongside the bundled native executable.
++        license_source = aruco_root / "LICENSE"
++        if not license_source.is_file():
++            raise RuntimeError(f"The ArUco2 license file was not found: {license_source}")
++        license_output = self._license_output()
++        license_output.parent.mkdir(parents=True, exist_ok=True)
++        shutil.copy2(license_source, license_output)
++
++    def get_outputs(self, include_bytecode: bool = True) -> list[str]:
++        outputs = list(super().get_outputs(include_bytecode=include_bytecode))
++        for output in (self._worker_output(), self._license_output()):
++            if output.is_file() and str(output) not in outputs:
++                outputs.append(str(output))
++        return outputs
++
++
++setup(
++    cmdclass={"build_py": BuildPyWithCMake, "bdist_wheel": BinaryWheel},
++    distclass=BinaryDistribution,
++    package_data={"faruco_bridge": ["bin/faruco_worker", "bin/faruco_worker.exe", "licenses/ARUCO2-LICENSE.txt"]},
++    include_package_data=True,
++    zip_safe=False,
++)
+diff --git a/tests/test_client.py b/tests/test_client.py
+index fb62087..217aed6 100644
+--- a/tests/test_client.py
++++ b/tests/test_client.py
+@@ -152,3 +152,20 @@ def test_generator_uses_only_upstream_supported_controls(
+     assert "24" in calls[0]
+     assert "--output" in calls[0]
+     assert "--id" not in calls[0]
++
++
++def test_resolves_worker_bundled_inside_python_package(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    import faruco_bridge.client as client_module
++
++    package_dir = tmp_path / "site-packages" / "faruco_bridge"
++    bin_dir = package_dir / "bin"
++    bin_dir.mkdir(parents=True)
++    worker = bin_dir / "faruco_worker"
++    worker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
++    worker.chmod(0o755)
++
++    monkeypatch.setattr(client_module, "__file__", str(package_dir / "client.py"))
++    monkeypatch.delenv("FARUCO_WORKER", raising=False)
++    assert client_module._resolve_worker() == str(worker.resolve())

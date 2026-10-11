@@ -69,3 +69,7 @@ endif()
 
 message(STATUS "FArUco bridge: OpenCV ${OpenCV_VERSION}")
 message(STATUS "ArUco2 source: ${ARUCO2_ROOT}")
+
+# setup.py installs this executable into faruco_bridge/bin in the wheel's
+# build_lib directory. The same install rule also supports editable installs.
+install(TARGETS faruco_worker RUNTIME DESTINATION faruco_bridge/bin)

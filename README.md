@@ -1,14 +1,14 @@
 # FArUco Bridge
 
-A Python client for **ArUco2's Fractal ArUco (FArUco) implementation**. The Python package communicates with a separately compiled C++ worker over a persistent stdin/stdout pipe. Detection and marker generation remain in ArUco2's C++ implementation.
+A Python client for **ArUco2's Fractal ArUco (FArUco) implementation**. The Python package communicates with a persistent C++ worker over stdin/stdout. Detection and marker generation run in ArUco2's C++ implementation.
 
-The Python client is an installable package (`faruco-bridge`). The `faruco_worker` executable is built separately for the target machine; it is not bundled into the Python wheel.
+The worker is compiled automatically while the platform-specific Python wheel is built and is bundled inside `faruco_bridge/bin/`. You normally do not need to run CMake yourself or set `FARUCO_WORKER`.
 
 ## Install from source
 
-These instructions are for Kubuntu/Ubuntu and Raspberry Pi OS/Debian. Build the native executable on each target machine, including the Raspberry Pi itself when targeting ARM.
+These instructions target Kubuntu/Ubuntu and Raspberry Pi OS/Debian. The native worker is compiled on the machine where the package is installed, so build it on the target machine for Raspberry Pi/ARM deployments.
 
-### 1. Get the source and ArUco2 submodule
+### 1. Get the source, including ArUco2
 
 ```bash
 git clone --recurse-submodules https://github.com/PladsElsker/faruco-bridge.git
@@ -21,25 +21,18 @@ If you already cloned without submodules, initialize them:
 git submodule update --init --recursive
 ```
 
-### 2. Install native build dependencies
+### 2. Install the native build dependencies
+
+`pip` invokes CMake during wheel construction. The system therefore needs a C++17 compiler, CMake, and OpenCV development files before installing the Python package:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake git pkg-config libopencv-dev
+sudo apt install -y build-essential cmake git pkg-config libopencv-dev python3-venv
 ```
 
-### 3. Compile the C++ worker
+`libopencv-dev` also installs the OpenCV shared libraries the worker needs at runtime. The wheel bundles `faruco_worker` and the ArUco2 license, but does not bundle OpenCV's shared libraries.
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j2
-```
-
-The executable should be at `build/faruco_worker`. CMake requires the ArUco2 submodule in `third_party/aruco2`. For a custom ArUco2 checkout, configure with `-DARUCO2_ROOT=/path/to/aruco2`.
-
-### 4. Install the Python package
-
-Create a virtual environment and install the project from the bridge root:
+### 3. Install the Python package
 
 ```bash
 python3 -m venv .venv
@@ -48,15 +41,15 @@ python -m pip install --upgrade pip
 python -m pip install .
 ```
 
-NumPy is installed as a Python dependency. Python OpenCV is optional and is only needed for the webcam example and `DetectionResult.annotate()`; install it with `python -m pip install '.[opencv]'` if required. The C++ build still requires the system OpenCV development package from step 2.
+The C++ build uses two parallel jobs by default to avoid exhausting memory on small Raspberry Pi boards. Increase the job count if desired, for example `FARUCO_BUILD_JOBS=4 python -m pip install .`.
 
-Tell the installed package where the separately compiled executable is located:
+During `pip install .`, the package build configures CMake, compiles `faruco_worker`, and places it in the wheel. The resulting wheel is platform-specific (OS/CPU architecture), and the build needs the ArUco2 submodule to be present. Python OpenCV is optional; install it only for `DetectionResult.annotate()` or the webcam example:
 
 ```bash
-export FARUCO_WORKER="$PWD/build/faruco_worker"
+python -m pip install '.[opencv]'
 ```
 
-Keep this environment variable set in the shell or service that runs your application. Alternatively, put `faruco_worker` on `PATH`, or pass `worker_path="/absolute/path/to/faruco_worker"` to `Detector` and `generate_marker`. The worker starts only when the first valid `Detector.detect()` call is made.
+The normal Python API locates the bundled worker automatically. You can still override it using `worker_path=...` or `FARUCO_WORKER` when testing another build.
 
 ### Installing as a submodule in another application
 
@@ -65,13 +58,22 @@ From the host application's root:
 ```bash
 git submodule add https://github.com/PladsElsker/faruco-bridge.git third_party/faruco_bridge
 git submodule update --init --recursive
-cmake -S third_party/faruco_bridge -B third_party/faruco_bridge/build -DCMAKE_BUILD_TYPE=Release
-cmake --build third_party/faruco_bridge/build -j2
+sudo apt install -y build-essential cmake pkg-config libopencv-dev
 python -m pip install ./third_party/faruco_bridge
-export FARUCO_WORKER="$PWD/third_party/faruco_bridge/build/faruco_worker"
 ```
 
-This installs the Python package into the active Python environment while keeping the C++ worker and ArUco2 source within the submodule checkout. The executable must be compiled for the host application's target architecture.
+The `pip install` command compiles and bundles the worker into the active Python environment. You do not need separate `cmake` commands or an `FARUCO_WORKER` setting. Ensure the submodule is checked out with its ArUco2 submodule initialized before building.
+
+### Development build
+
+To build a standalone worker for C++ development or debugging, CMake can still be invoked directly:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j2
+```
+
+The standalone executable is written to `build/faruco_worker`. For a custom ArUco2 checkout, configure with `-DARUCO2_ROOT=/path/to/aruco2`.
 
 ## Lazy worker startup
 
@@ -81,22 +83,24 @@ Constructing a `Detector` validates its configuration but does not start a proce
 
 The bridge uses ArUco2's **existing Fractal ArUco generator**. It exposes the upstream generator's supported choices; it does not define a new marker format or add custom per-level geometry.
 
-From the bridge checkout:
+Generate a marker through the bundled worker using the Python API:
 
-```bash
-./build/faruco_worker generate \
-  --type FRACTAL_3L_6 \
-  --bit-size 20 \
-  --output fractal_3l_6.png
+```python
+from faruco_bridge import generate_marker
+
+output = generate_marker(
+    fractal_type="FRACTAL_3L_6",
+    output="fractal_3l_6.png",
+    bit_size=20,
+)
+print(output)
 ```
 
-Show the generation-specific command help at any time:
+For C++ worker CLI debugging, build the standalone executable using the CMake commands in the Development build section above.
 
-```bash
-./build/faruco_worker generate --help
-```
+### Native worker generator arguments
 
-### Generator arguments
+The following options apply to the standalone C++ worker CLI used for development; the Python `generate_marker()` API exposes the corresponding `fractal_type`, `bit_size`, and `output` parameters.
 
 | Argument | Default | Meaning |
 |---|---|---|
@@ -179,13 +183,13 @@ If `camera_matrix` is supplied but `dist_coeffs` is omitted, five zero distortio
 
 ## Webcam example
 
-After compiling the worker and setting `FARUCO_WORKER`, run:
+After installing the package, run:
 
 ```bash
 python examples/webcam_demo.py --camera 0 --type FRACTAL_3L_6
 ```
 
-The example can also run directly from the checkout without installing the package. An optional NPZ calibration file can contain arrays named `camera_matrix` and `dist_coeffs`:
+The example expects the package to be installed; an editable install builds the worker into the checkout. An optional NPZ calibration file can contain arrays named `camera_matrix` and `dist_coeffs`:
 
 ```bash
 python3 examples/webcam_demo.py --camera 0 --calibration calibration.npz
@@ -195,14 +199,14 @@ Press `q` or Escape to exit.
 
 ## Tests
 
-The client/protocol tests use a fake worker, so they do not require an ArUco2 checkout or a working native build. Install the development test dependency and run them with:
+The client/protocol tests use a fake worker. From the repository root, install the Python test dependencies and run them without triggering the native wheel build:
 
 ```bash
-python -m pip install -e '.[test]'
-python -m pytest -q
+python -m pip install numpy pytest
+PYTHONPATH=. python -m pytest -q
 ```
 
-A native smoke test must still be performed on a machine with ArUco2 and the OpenCV development libraries installed: generate a marker, detect it in a saved or rendered frame, and check corner and pose-point output.
+To test a full editable installation, use `python -m pip install -e '.[test]'`; this also compiles the native worker and therefore requires the native build dependencies from step 2. A native smoke test should be performed on the target machine: generate a marker, detect it in a saved or rendered frame, and check corner and pose-point output.
 
 ## Worker protocol v1
 
@@ -215,10 +219,10 @@ DETECT <request_id> <width> <height> <channels> <payload_bytes> <include_points>
 
 `channels` is `1` for grayscale or `3` for BGR, with interleaved row-major `uint8` pixels. Responses are one JSON object per line. `PING` and `QUIT` provide health-check and shutdown commands. Stdout is reserved for protocol messages; diagnostics go to stderr.
 
-The worker starts lazily on the first valid detection and is then reused. The protocol is synchronous: Python sends one frame and waits for its result before sending another. This avoids per-frame process startup and image re-encoding, while keeping the initial implementation simple. It does not yet implement asynchronous pipelining or shared-memory transport.
+The bundled worker starts lazily on the first valid detection and is then reused. The protocol is synchronous: Python sends one frame and waits for its result before sending another. This avoids per-frame process startup and image re-encoding, while keeping the initial implementation simple. It does not yet implement asynchronous pipelining or shared-memory transport.
 
 ## Notes and limitations
 
-- The C++ executable is built for the host architecture and links to that machine's OpenCV libraries.
+- The wheel contains a worker built for the host architecture and links to that machine's OpenCV libraries. The wheel itself is not a portable, pure-Python wheel.
 - The executable being compiled confirms build success, not detection or pose accuracy. Validate with known images and the intended camera calibration.
 - ArUco2's fractal point API behaves differently depending on the number of detected markers. Test single- and multi-marker cases before relying on full inner/outer correspondences for pose estimation.

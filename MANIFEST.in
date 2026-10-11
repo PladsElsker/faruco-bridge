@@ -1,0 +1,7 @@
+include CMakeLists.txt
+include README.md
+include pyproject.toml
+include setup.py
+recursive-include cpp *.cpp *.hpp *.h
+recursive-include faruco_bridge *.py
+recursive-include third_party/aruco2 *.cpp *.hpp *.h *.cl *.cmake CMakeLists.txt *.md LICENSE

@@ -149,9 +149,14 @@ def _resolve_worker(worker_path: Optional[os.PathLike[str] | str] = None) -> str
     if env_worker:
         candidates.append(Path(env_worker).expanduser())
 
-    # The worker is built into the bridge checkout. This also works when the
-    # bridge is checked out as a Git submodule.
-    package_root = Path(__file__).resolve().parents[1]
+    # Normal wheel installs bundle the platform-built executable beside this
+    # module. An explicit path or FARUCO_WORKER takes precedence for overrides.
+    package_dir = Path(__file__).resolve().parent
+    bundled_name = "faruco_worker.exe" if os.name == "nt" else "faruco_worker"
+    candidates.append(package_dir / "bin" / bundled_name)
+
+    # Keep support for source checkouts and manually compiled development builds.
+    package_root = package_dir.parent
     candidates.extend([
         package_root / "build" / "faruco_worker",
         package_root / "build" / "bin" / "faruco_worker",

@@ -6,3 +6,5 @@ __pycache__/
 venv/
 *.png
 dist/
+/faruco_bridge/bin/
+/faruco_bridge/licenses/ARUCO2-LICENSE.txt

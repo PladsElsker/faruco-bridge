@@ -152,3 +152,20 @@ def test_generator_uses_only_upstream_supported_controls(
     assert "24" in calls[0]
     assert "--output" in calls[0]
     assert "--id" not in calls[0]
+
+
+def test_resolves_worker_bundled_inside_python_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import faruco_bridge.client as client_module
+
+    package_dir = tmp_path / "site-packages" / "faruco_bridge"
+    bin_dir = package_dir / "bin"
+    bin_dir.mkdir(parents=True)
+    worker = bin_dir / "faruco_worker"
+    worker.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    worker.chmod(0o755)
+
+    monkeypatch.setattr(client_module, "__file__", str(package_dir / "client.py"))
+    monkeypatch.delenv("FARUCO_WORKER", raising=False)
+    assert client_module._resolve_worker() == str(worker.resolve())
