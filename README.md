@@ -13,8 +13,6 @@ sudo apt update
 sudo apt install -y build-essential cmake git pkg-config libopencv-dev python3-venv
 ```
 
-The build needs network access to GitHub to fetch ArUco2. The native worker links to the system OpenCV libraries, so those must remain installed at runtime.
-
 ### Clone and create a virtual environment
 
 ```bash
@@ -22,13 +20,9 @@ git clone https://github.com/PladsElsker/faruco-bridge.git
 cd faruco-bridge
 python3 -m venv venv
 source venv/bin/activate
-python -m pip install --upgrade pip
 ```
 
 ### Install the package
-
-For detection and marker generation:
-
 ```bash
 python -m pip install .
 ```
@@ -39,7 +33,7 @@ For the examples and `DetectionResult.annotate()`, install the optional Python O
 python -m pip install '.[opencv]'
 ```
 
-During installation, the build fetches the default branch of `https://github.com/PladsElsker/aruco2.git`, compiles `faruco_worker`, and bundles the executable and ArUco2 license into the wheel. There is no ArUco2 submodule or manual CMake step. The build uses two parallel jobs by default; on a larger machine, you can change that with `FARUCO_BUILD_JOBS=4 python -m pip install .`.
+During installation, the build fetches the default branch of `https://github.com/PladsElsker/aruco2.git`, compiles `faruco_worker`, and bundles the executable and ArUco2 license into the wheel. The build uses two threads by default; on a larger machine, you can change that with `FARUCO_BUILD_JOBS=4 python -m pip install .`.
 
 ## 2. Detect markers
 
@@ -66,7 +60,9 @@ with Detector(fractal_type="FRACTAL_3L_6", marker_size_m=0.10) as detector:
     cv2.imwrite("annotated.png", result.annotate(frame))
 ```
 
-The native worker starts automatically on the first valid `detect()` call and is reused for subsequent frames. Creating a `Detector` does not start the worker. `close()` or exiting the `with` block shuts it down.
+The native worker starts automatically on the first valid `detect()` call and is reused for subsequent frames.  
+Creating a `Detector` does not start the worker.  
+`close()` or exiting the `with` block shuts it down.
 
 ### Pose estimation
 
